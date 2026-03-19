@@ -10,6 +10,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
+from langchain_core.documents import Document   # ← fixed import
 
 load_dotenv()
 
@@ -32,7 +33,6 @@ def ingest_papers():
 
     if not pdf_files:
         print("⚠️  No PDFs found in /papers. Using sample placeholder document...")
-        from langchain.schema import Document
         chunks = [
             Document(
                 page_content=(
