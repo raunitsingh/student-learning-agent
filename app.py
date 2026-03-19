@@ -1,11 +1,13 @@
 """
-app.py — With conversation memory + source chunk viewer
+app.py — Features 1-5: Memory, Chunks, Scoping, Confidence, Export
 """
 import os
 import time
+import json
 import warnings
 import shutil
 from pathlib import Path
+from datetime import datetime
 warnings.filterwarnings("ignore")
 
 import streamlit as st
@@ -68,59 +70,54 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     color: #e8e6e1;
 }
 .source-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: #12122a;
-    color: #7c6fff;
-    border: 1px solid #2d2660;
-    border-radius: 20px;
-    padding: 2px 10px;
-    font-size: 0.72rem;
-    font-family: 'DM Mono', monospace;
-    margin: 2px;
+    display: inline-flex; align-items: center; gap: 5px;
+    background: #12122a; color: #7c6fff;
+    border: 1px solid #2d2660; border-radius: 20px;
+    padding: 2px 10px; font-size: 0.72rem;
+    font-family: 'DM Mono', monospace; margin: 2px;
 }
 .guardrail-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: #1a0f0f;
-    color: #ff6b6b;
-    border: 1px solid #3d1515;
-    border-radius: 6px;
-    padding: 3px 10px;
-    font-size: 0.75rem;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #1a0f0f; color: #ff6b6b;
+    border: 1px solid #3d1515; border-radius: 6px;
+    padding: 3px 10px; font-size: 0.75rem;
     font-family: 'DM Mono', monospace;
 }
 .memory-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: #0f1a12;
-    color: #4caf82;
-    border: 1px solid #1a3d28;
-    border-radius: 6px;
-    padding: 3px 10px;
-    font-size: 0.72rem;
-    font-family: 'DM Mono', monospace;
-    margin-left: 6px;
+    display: inline-flex; align-items: center; gap: 5px;
+    background: #0f1a12; color: #4caf82;
+    border: 1px solid #1a3d28; border-radius: 6px;
+    padding: 3px 10px; font-size: 0.72rem;
+    font-family: 'DM Mono', monospace; margin: 2px;
+}
+.scope-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: #1a130f; color: #ffaa5c;
+    border: 1px solid #3d2a15; border-radius: 6px;
+    padding: 3px 10px; font-size: 0.72rem;
+    font-family: 'DM Mono', monospace; margin: 2px;
 }
 .chunk-box {
-    background: #0c0c18;
-    border: 1px solid #1a1a30;
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin: 4px 0;
-    font-size: 0.78rem;
-    font-family: 'DM Mono', monospace;
-    color: #888;
-    line-height: 1.6;
+    background: #0c0c18; border: 1px solid #1a1a30;
+    border-radius: 8px; padding: 10px 14px; margin: 4px 0;
+    font-size: 0.78rem; font-family: 'DM Mono', monospace;
+    color: #888; line-height: 1.6;
 }
 .chunk-meta {
-    font-size: 0.68rem;
-    color: #7c6fff;
-    margin-bottom: 6px;
+    font-size: 0.68rem; color: #7c6fff; margin-bottom: 6px;
     font-family: 'DM Mono', monospace;
+}
+.conf-bar-wrap {
+    display: flex; align-items: center; gap: 10px;
+    margin: 6px 0 2px; font-family: 'DM Mono', monospace; font-size: 0.72rem;
+}
+.conf-bar-bg {
+    flex: 1; height: 5px; background: #1a1a2e;
+    border-radius: 3px; overflow: hidden;
+}
+.conf-bar-fill {
+    height: 100%; border-radius: 3px;
+    transition: width 0.4s ease;
 }
 [data-testid="stChatInput"] {
     background: #0f0f1a !important;
@@ -132,16 +129,12 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     box-shadow: 0 0 0 3px rgba(124,111,255,0.12) !important;
 }
 .stButton > button {
-    background: #14132a !important;
-    color: #9e9db5 !important;
-    border: 1px solid #2a2a40 !important;
-    border-radius: 8px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-size: 0.82rem !important;
+    background: #14132a !important; color: #9e9db5 !important;
+    border: 1px solid #2a2a40 !important; border-radius: 8px !important;
+    font-family: 'DM Sans', sans-serif !important; font-size: 0.82rem !important;
 }
 .stButton > button:hover {
-    border-color: #7c6fff !important;
-    color: #e8e6e1 !important;
+    border-color: #7c6fff !important; color: #e8e6e1 !important;
     background: #1a1730 !important;
 }
 [data-testid="stFileUploader"] {
@@ -152,7 +145,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #2a2a40; border-radius: 2px; }
-section-divider { border: none; border-top: 1px solid #1a1a2e; margin: 16px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -160,6 +152,9 @@ section-divider { border: none; border-top: 1px solid #1a1a2e; margin: 16px 0; }
 PAPERS_DIR = Path("papers")
 PAPERS_DIR.mkdir(exist_ok=True)
 CHROMA_DIR = "chroma_db"
+
+CONF_COLORS = {1: "#ff4444", 2: "#ff8c42", 3: "#ffd166", 4: "#06d6a0", 5: "#4caf82"}
+CONF_LABELS = {1: "Low", 2: "Fair", 3: "Moderate", 4: "Good", 5: "High"}
 
 
 def get_paper_list():
@@ -184,10 +179,9 @@ def ingest_single_pdf(pdf_path):
         separators=["\n\n", "\n", ". ", " "],
     )
     chunks = splitter.split_documents(pages)
-    embeddings = get_embeddings()
     vectorstore = Chroma(
         persist_directory=CHROMA_DIR,
-        embedding_function=embeddings,
+        embedding_function=get_embeddings(),
         collection_name="research_papers",
     )
     vectorstore.add_documents(chunks)
@@ -203,6 +197,46 @@ def rebuild_vectorstore():
     ingest_papers()
 
 
+def render_confidence(score: int):
+    """Renders a colored confidence bar with label."""
+    if not score or score == 0:
+        return
+    pct = score / 5 * 100
+    color = CONF_COLORS.get(score, "#555")
+    label = CONF_LABELS.get(score, "?")
+    st.markdown(
+        f"""<div class='conf-bar-wrap'>
+            <span style='color:#555;'>Confidence</span>
+            <div class='conf-bar-bg'>
+                <div class='conf-bar-fill' style='width:{pct}%;background:{color};'></div>
+            </div>
+            <span style='color:{color};font-weight:600;'>{label} ({score}/5)</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def export_chat_json(messages: list) -> str:
+    """Serialize chat history to JSON string for download."""
+    export = {
+        "exported_at": datetime.now().isoformat(),
+        "total_exchanges": len([m for m in messages if m["role"] == "user"]),
+        "conversation": [],
+    }
+    for msg in messages:
+        if msg["role"] == "user":
+            export["conversation"].append({"question": msg["content"]})
+        elif msg["role"] == "assistant":
+            last = export["conversation"][-1] if export["conversation"] else {}
+            last.update({
+                "answer": msg["content"],
+                "sources": msg.get("sources", []),
+                "confidence": msg.get("confidence"),
+                "guardrail_triggered": msg.get("guardrail_triggered", False),
+            })
+    return json.dumps(export, indent=2)
+
+
 # ── API key check ─────────────────────────────────────────────────────────
 if not os.getenv("GROQ_API_KEY"):
     st.error("❌ **GROQ_API_KEY** not found. Add it to your `.env` file.")
@@ -213,7 +247,7 @@ if not os.path.exists(CHROMA_DIR):
         from ingest import ingest_papers
         ingest_papers()
 
-# ── Load agent (cached) ───────────────────────────────────────────────────
+
 @st.cache_resource(show_spinner="Loading model...")
 def load_agent(k: int):
     from rag_chain import build_rag_chain
@@ -224,24 +258,25 @@ def load_agent(k: int):
 # ── Sidebar ───────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
-    <div style='padding: 8px 0 16px'>
-        <div style='font-family: Syne, sans-serif; font-weight: 800; font-size: 1.3rem;
-                    background: linear-gradient(135deg, #e8e6e1, #7c6fff);
-                    -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>
+    <div style='padding:8px 0 16px'>
+        <div style='font-family:Syne,sans-serif;font-weight:800;font-size:1.3rem;
+                    background:linear-gradient(135deg,#e8e6e1,#7c6fff);
+                    -webkit-background-clip:text;-webkit-text-fill-color:transparent;'>
             🧠 ResearchMind
         </div>
-        <div style='font-family: DM Mono, monospace; font-size: 0.65rem; color: #444; margin-top: 2px;'>
+        <div style='font-family:DM Mono,monospace;font-size:0.65rem;color:#444;margin-top:2px;'>
             RAG · GROQ · LANGCHAIN · MEMORY
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("<div style='font-size:0.75rem; color:#666; font-family:DM Mono,monospace; margin-bottom:8px;'>KNOWLEDGE BASE</div>", unsafe_allow_html=True)
+
+    # ── Knowledge Base ────────────────────────────────────────────────────
+    st.markdown("<div style='font-size:0.75rem;color:#666;font-family:DM Mono,monospace;margin-bottom:8px;'>KNOWLEDGE BASE</div>", unsafe_allow_html=True)
 
     uploaded_files = st.file_uploader(
-        "Upload research papers",
-        type=["pdf"],
+        "Upload PDFs", type=["pdf"],
         accept_multiple_files=True,
         label_visibility="collapsed",
     )
@@ -261,45 +296,69 @@ with st.sidebar:
                         st.error(f"Failed: {e}")
                         dest.unlink(missing_ok=True)
             else:
-                st.info(f"Already in KB: {uf.name}")
+                st.info(f"Already loaded: {uf.name}")
 
     papers = get_paper_list()
     if papers:
         st.markdown(f"<div style='font-size:0.7rem;color:#555;font-family:DM Mono,monospace;margin:10px 0 6px;'>{len(papers)} PAPER(S)</div>", unsafe_allow_html=True)
         for p in papers:
-            col1, col2 = st.columns([4, 1])
-            with col1:
+            c1, c2 = st.columns([4, 1])
+            with c1:
                 st.markdown(
                     f"<div style='font-size:0.75rem;font-family:DM Mono,monospace;color:#9e9db5;"
-                    f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' title='{p.name}'>"
+                    f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'title='{p.name}'>"
                     f"📄 {p.name[:26]}{'…' if len(p.name)>26 else ''}</div>"
                     f"<div style='font-size:0.65rem;color:#444;'>{get_paper_size(p)}</div>",
                     unsafe_allow_html=True)
-            with col2:
+            with c2:
                 if st.button("✕", key=f"del_{p.name}"):
                     p.unlink(missing_ok=True)
                     with st.spinner("Rebuilding KB..."):
                         rebuild_vectorstore()
                     st.rerun()
     else:
-        st.markdown("<div style='font-size:0.75rem;color:#444;font-family:DM Mono,monospace;padding:8px 0;'>No papers. Upload above.</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:0.75rem;color:#444;font-family:DM Mono,monospace;padding:8px 0;'>No papers yet.</div>", unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("<div style='font-size:0.75rem; color:#666; font-family:DM Mono,monospace; margin-bottom:8px;'>SETTINGS</div>", unsafe_allow_html=True)
+
+    # ── Feature 3: Paper scoping ──────────────────────────────────────────
+    st.markdown("<div style='font-size:0.75rem;color:#666;font-family:DM Mono,monospace;margin-bottom:8px;'>SCOPE RETRIEVAL TO</div>", unsafe_allow_html=True)
+
+    paper_names = [p.name for p in papers]
+    if paper_names:
+        scoped_papers = st.multiselect(
+            "Select papers",
+            options=paper_names,
+            default=[],
+            label_visibility="collapsed",
+            placeholder="All papers (no filter)",
+        )
+    else:
+        scoped_papers = []
+        st.markdown("<div style='font-size:0.72rem;color:#444;font-family:DM Mono,monospace;'>Upload papers to scope</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── Settings ──────────────────────────────────────────────────────────
+    st.markdown("<div style='font-size:0.75rem;color:#666;font-family:DM Mono,monospace;margin-bottom:8px;'>SETTINGS</div>", unsafe_allow_html=True)
 
     top_k = st.slider("Chunks retrieved", 2, 8, 4)
-    show_sources = st.toggle("Show sources", value=True)
-    show_chunks = st.toggle("Show retrieved chunks", value=False)
-    memory_window = st.slider("Memory window (exchanges)", 1, 10, 5,
-                               help="How many past Q&A pairs the model remembers")
+    memory_window = st.slider("Memory window", 1, 10, 5)
+    show_sources  = st.toggle("Show sources", value=True)
+    show_chunks   = st.toggle("Show retrieved chunks", value=False)
+    # Feature 4: confidence toggle
+    show_confidence = st.toggle("Show confidence score", value=True,
+                                 help="Asks LLM to rate how grounded the answer is (1 extra API call)")
 
     st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
+
+    # ── Actions ───────────────────────────────────────────────────────────
+    c1, c2 = st.columns(2)
+    with c1:
         if st.button("🗑️ Clear chat"):
             st.session_state.messages = []
             st.rerun()
-    with col2:
+    with c2:
         if st.button("📊 Eval"):
             with st.spinner("Running RAGAS..."):
                 try:
@@ -309,6 +368,18 @@ with st.sidebar:
                     st.success("Done!")
                 except Exception as e:
                     st.error(f"{e}")
+
+    # Feature 5: Export button
+    if st.session_state.get("messages"):
+        export_data = export_chat_json(st.session_state.messages)
+        fname = f"researchmind_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+        st.download_button(
+            label="💾 Export chat (JSON)",
+            data=export_data,
+            file_name=fname,
+            mime="application/json",
+            use_container_width=True,
+        )
 
     if "eval_scores" in st.session_state:
         for k, v in st.session_state.eval_scores.items():
@@ -331,23 +402,21 @@ if "pending_question" not in st.session_state:
 # ── Main header ───────────────────────────────────────────────────────────
 papers = get_paper_list()
 n_msgs = len([m for m in st.session_state.messages if m["role"] == "user"])
-memory_active = n_msgs > 0
 
 col_t, col_tag = st.columns([6, 1])
 with col_t:
     st.markdown("<div class='app-title'>ResearchMind</div>", unsafe_allow_html=True)
 with col_tag:
-    st.markdown("<div class='app-tag' style='margin-top:12px;'>v2.1</div>", unsafe_allow_html=True)
+    st.markdown("<div class='app-tag' style='margin-top:12px;'>v3.0</div>", unsafe_allow_html=True)
 
 st.markdown("<div class='app-sub'>Ask anything — answers grounded in your uploaded research papers</div>", unsafe_allow_html=True)
 
-# ── Stats bar ─────────────────────────────────────────────────────────────
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Papers", len(papers))
 c2.metric("Questions", n_msgs)
 c3.metric("Top-K", top_k)
 c4.metric("Memory", f"{min(n_msgs, memory_window)}/{memory_window}")
-c5.metric("Model", "LLaMA 3.1")
+c5.metric("Scope", f"{len(scoped_papers)} paper(s)" if scoped_papers else "All")
 
 st.markdown("---")
 
@@ -355,37 +424,40 @@ st.markdown("---")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant":
-            st.markdown(
-                f"<div class='answer-block'>{msg['content']}</div>",
-                unsafe_allow_html=True)
+            st.markdown(f"<div class='answer-block'>{msg['content']}</div>", unsafe_allow_html=True)
 
-            # Memory indicator — show on all except first answer
+            # Badges row
+            badges = ""
             if msg.get("used_memory"):
-                st.markdown(
-                    f'<span class="memory-badge">🧠 Used {msg["used_memory"]} prior exchange(s)</span>',
-                    unsafe_allow_html=True)
+                badges += f'<span class="memory-badge">🧠 {msg["used_memory"]} exchange(s) recalled</span>'
+            if msg.get("scoped"):
+                badges += f'<span class="scope-badge">🎯 Scoped: {", ".join(msg["scoped"])}</span>'
+            if badges:
+                st.markdown(badges, unsafe_allow_html=True)
+
+            # Confidence bar
+            if show_confidence and msg.get("confidence"):
+                render_confidence(msg["confidence"])
 
             # Sources
             if msg.get("sources") and show_sources:
                 st.markdown(
-                    " ".join(
-                        f'<span class="source-chip">📄 {s.split("/")[-1].split(chr(92))[-1]}</span>'
-                        for s in msg["sources"]
-                    ), unsafe_allow_html=True)
+                    " ".join(f'<span class="source-chip">📄 {s.split("/")[-1].split(chr(92))[-1]}</span>'
+                             for s in msg["sources"]),
+                    unsafe_allow_html=True)
 
-            # Retrieved chunks expander
+            # Retrieved chunks
             if msg.get("retrieved_chunks") and show_chunks:
                 with st.expander(f"🔍 View {len(msg['retrieved_chunks'])} retrieved chunks"):
                     for i, chunk in enumerate(msg["retrieved_chunks"]):
-                        src = chunk['source'].split('/')[-1].split('\\')[-1]
+                        src = chunk["source"].split("/")[-1].split("\\")[-1]
                         st.markdown(
                             f"<div class='chunk-meta'>Chunk {i+1} · {src} · page {chunk['page']}</div>"
                             f"<div class='chunk-box'>{chunk['content'][:500]}{'…' if len(chunk['content'])>500 else ''}</div>",
                             unsafe_allow_html=True)
 
             if msg.get("guardrail_triggered"):
-                st.markdown('<span class="guardrail-badge">🛡️ Off-topic blocked</span>',
-                            unsafe_allow_html=True)
+                st.markdown('<span class="guardrail-badge">🛡️ Off-topic blocked</span>', unsafe_allow_html=True)
         else:
             st.markdown(msg["content"])
 
@@ -409,70 +481,77 @@ if not st.session_state.messages:
 
 # ── Process question ──────────────────────────────────────────────────────
 user_input = st.chat_input("Ask about your research papers...")
-
 question = user_input or st.session_state.get("pending_question")
 if st.session_state.pending_question:
     st.session_state.pending_question = None
 
 if question:
     st.session_state.messages.append({"role": "user", "content": question})
-
     with st.chat_message("user"):
         st.markdown(question)
 
-    # Build history window — exclude the question we just appended
     all_msgs = st.session_state.messages[:-1]
-    # Keep last memory_window exchanges = memory_window * 2 messages
     history_window = all_msgs[-(memory_window * 2):]
     n_exchanges_used = len([m for m in history_window if m["role"] == "user"])
 
     with st.chat_message("assistant"):
         with st.spinner("Searching papers..."):
-            result = agent.ask(question, chat_history=history_window)
+            result = agent.ask(
+                question,
+                chat_history=history_window,
+                scoped_papers=scoped_papers if scoped_papers else None,
+                compute_confidence=show_confidence,
+            )
 
+        # Stream answer
         placeholder = st.empty()
         displayed = ""
         for char in result["answer"]:
             displayed += char
-            placeholder.markdown(
-                f"<div class='answer-block'>{displayed}▌</div>",
-                unsafe_allow_html=True)
+            placeholder.markdown(f"<div class='answer-block'>{displayed}▌</div>", unsafe_allow_html=True)
             time.sleep(0.006)
-        placeholder.markdown(
-            f"<div class='answer-block'>{displayed}</div>",
-            unsafe_allow_html=True)
+        placeholder.markdown(f"<div class='answer-block'>{displayed}</div>", unsafe_allow_html=True)
 
-        # Memory badge — only show if we actually had history
+        # Badges
+        badges = ""
         if n_exchanges_used > 0 and not result.get("guardrail_triggered"):
-            st.markdown(
-                f'<span class="memory-badge">🧠 Remembered {n_exchanges_used} prior exchange(s)</span>',
-                unsafe_allow_html=True)
+            badges += f'<span class="memory-badge">🧠 {n_exchanges_used} exchange(s) recalled</span>'
+        if scoped_papers and not result.get("guardrail_triggered"):
+            badges += f'<span class="scope-badge">🎯 Scoped: {", ".join(scoped_papers)}</span>'
+        if badges:
+            st.markdown(badges, unsafe_allow_html=True)
 
+        # Confidence bar
+        if show_confidence and result.get("confidence") and not result.get("guardrail_triggered"):
+            render_confidence(result["confidence"])
+
+        # Sources
         if result.get("sources") and show_sources and not result.get("guardrail_triggered"):
             st.markdown(
-                " ".join(
-                    f'<span class="source-chip">📄 {s.split("/")[-1].split(chr(92))[-1]}</span>'
-                    for s in result["sources"]
-                ), unsafe_allow_html=True)
+                " ".join(f'<span class="source-chip">📄 {s.split("/")[-1].split(chr(92))[-1]}</span>'
+                         for s in result["sources"]),
+                unsafe_allow_html=True)
 
+        # Chunks
         if result.get("retrieved_chunks") and show_chunks and not result.get("guardrail_triggered"):
             with st.expander(f"🔍 View {len(result['retrieved_chunks'])} retrieved chunks"):
                 for i, chunk in enumerate(result["retrieved_chunks"]):
-                    src = chunk['source'].split('/')[-1].split('\\')[-1]
+                    src = chunk["source"].split("/")[-1].split("\\")[-1]
                     st.markdown(
                         f"<div class='chunk-meta'>Chunk {i+1} · {src} · page {chunk['page']}</div>"
                         f"<div class='chunk-box'>{chunk['content'][:500]}{'…' if len(chunk['content'])>500 else ''}</div>",
                         unsafe_allow_html=True)
 
         if result.get("guardrail_triggered"):
-            st.markdown('<span class="guardrail-badge">🛡️ Off-topic blocked</span>',
-                        unsafe_allow_html=True)
+            st.markdown('<span class="guardrail-badge">🛡️ Off-topic blocked</span>', unsafe_allow_html=True)
 
     st.session_state.messages.append({
         "role": "assistant",
         "content": result["answer"],
         "sources": result.get("sources", []),
         "retrieved_chunks": result.get("retrieved_chunks", []),
+        "confidence": result.get("confidence"),
         "guardrail_triggered": result.get("guardrail_triggered", False),
         "used_memory": n_exchanges_used if n_exchanges_used > 0 else None,
+        "scoped": scoped_papers if scoped_papers else None,
     })
