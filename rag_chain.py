@@ -1,5 +1,5 @@
 """
-rag_chain.py — Fast version: embeddings cached at module level
+rag_chain.py — With conversation memory (last 5 exchanges)
 """
 import os
 from dotenv import load_dotenv
@@ -14,8 +14,9 @@ load_dotenv()
 CHROMA_DIR = "chroma_db"
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
+# ── Prompt now includes chat history ─────────────────────────────────────
 STUDENT_PROMPT = PromptTemplate(
-    input_variables=["context", "question"],
+    input_variables=["context", "chat_history", "question"],
     template="""You are an expert academic tutor helping students understand research papers.
 Use ONLY the context below to answer the question. If the answer is not in the context,
 say "I don't have enough information in the provided papers to answer this."
@@ -23,15 +24,21 @@ say "I don't have enough information in the provided papers to answer this."
 Do NOT make up information. Be clear, structured, and educational.
 If relevant, break your answer into steps or bullet points.
 
+IMPORTANT: Use the chat history to understand follow-up questions and references
+like "it", "that", "the model", "the paper" — resolve them from prior context.
+
 Context from research papers:
 {context}
+
+Chat History:
+{chat_history}
 
 Student Question: {question}
 
 Detailed Answer:""",
 )
 
-# ── Cached at module level — loaded once, reused forever ─────────────────
+# ── Module-level cache ────────────────────────────────────────────────────
 _embeddings = None
 _vectorstore = None
 
@@ -63,6 +70,26 @@ def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 
+def format_chat_history(history: list[dict]) -> str:
+    """
+    Takes last N messages from st.session_state.messages format:
+    [{"role": "user"|"assistant", "content": str}, ...]
+    Returns a plain-text block for the prompt.
+    """
+    if not history:
+        return "No previous conversation."
+
+    lines = []
+    for msg in history:
+        role = "Student" if msg["role"] == "user" else "Tutor"
+        # Truncate very long assistant answers to keep prompt lean
+        content = msg["content"]
+        if msg["role"] == "assistant" and len(content) > 400:
+            content = content[:400] + "..."
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
 def build_rag_chain(top_k: int = 4):
     retriever = get_vectorstore().as_retriever(
         search_type="mmr",
@@ -79,10 +106,42 @@ def build_rag_chain(top_k: int = 4):
     return {"retriever": retriever, "llm": llm}
 
 
-def get_answer(chain, question: str) -> dict:
+def get_answer(chain, question: str, chat_history: list[dict] = None) -> dict:
+    """
+    Args:
+        chain: built by build_rag_chain()
+        question: current user question
+        chat_history: last N messages from session_state (excluding current question)
+                      format: [{"role": "user"|"assistant", "content": str}]
+    """
+    if chat_history is None:
+        chat_history = []
+
+    # Keep only last 5 exchanges (10 messages) to avoid prompt bloat
+    recent_history = chat_history[-10:]
+
     docs = chain["retriever"].invoke(question)
     context = format_docs(docs)
-    prompt_text = STUDENT_PROMPT.format(context=context, question=question)
+    history_text = format_chat_history(recent_history)
+
+    prompt_text = STUDENT_PROMPT.format(
+        context=context,
+        chat_history=history_text,
+        question=question,
+    )
+
     response = chain["llm"].invoke(prompt_text)
     sources = list({doc.metadata.get("source", "unknown") for doc in docs})
-    return {"answer": response.content, "sources": sources}
+
+    return {
+        "answer": response.content,
+        "sources": sources,
+        "retrieved_chunks": [
+            {
+                "content": doc.page_content,
+                "source": doc.metadata.get("source", "unknown"),
+                "page": doc.metadata.get("page", "?"),
+            }
+            for doc in docs
+        ],
+    }
