@@ -1,5 +1,5 @@
 """
-rag_chain.py — With conversation memory (last 5 exchanges)
+rag_chain.py — With paper scoping, confidence scoring, memory
 """
 import os
 from dotenv import load_dotenv
@@ -14,7 +14,6 @@ load_dotenv()
 CHROMA_DIR = "chroma_db"
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
-# ── Prompt now includes chat history ─────────────────────────────────────
 STUDENT_PROMPT = PromptTemplate(
     input_variables=["context", "chat_history", "question"],
     template="""You are an expert academic tutor helping students understand research papers.
@@ -38,7 +37,24 @@ Student Question: {question}
 Detailed Answer:""",
 )
 
-# ── Module-level cache ────────────────────────────────────────────────────
+CONFIDENCE_PROMPT = """You are evaluating whether an AI answer is grounded in the provided context.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer: {answer}
+
+Rate how well the answer is supported by the context on a scale of 1 to 5:
+1 = Not supported at all / likely hallucinated
+2 = Weakly supported
+3 = Partially supported
+4 = Mostly supported
+5 = Fully supported by context
+
+Reply with ONLY a single integer (1, 2, 3, 4, or 5). Nothing else."""
+
 _embeddings = None
 _vectorstore = None
 
@@ -46,7 +62,7 @@ _vectorstore = None
 def get_embeddings():
     global _embeddings
     if _embeddings is None:
-        print("📦 Loading embedding model (one-time)...")
+        print("Loading embedding model (one-time)...")
         _embeddings = HuggingFaceEmbeddings(
             model_name=EMBED_MODEL,
             model_kwargs={"device": "cpu"},
@@ -70,19 +86,12 @@ def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 
-def format_chat_history(history: list[dict]) -> str:
-    """
-    Takes last N messages from st.session_state.messages format:
-    [{"role": "user"|"assistant", "content": str}, ...]
-    Returns a plain-text block for the prompt.
-    """
+def format_chat_history(history: list) -> str:
     if not history:
         return "No previous conversation."
-
     lines = []
     for msg in history:
         role = "Student" if msg["role"] == "user" else "Tutor"
-        # Truncate very long assistant answers to keep prompt lean
         content = msg["content"]
         if msg["role"] == "assistant" and len(content) > 400:
             content = content[:400] + "..."
@@ -95,32 +104,63 @@ def build_rag_chain(top_k: int = 4):
         search_type="mmr",
         search_kwargs={"k": top_k, "fetch_k": 10},
     )
-
     llm = ChatGroq(
         model="llama-3.1-8b-instant",
         temperature=0.2,
         max_tokens=1024,
         api_key=os.getenv("GROQ_API_KEY"),
     )
+    return {"retriever": retriever, "llm": llm, "top_k": top_k}
 
-    return {"retriever": retriever, "llm": llm}
+
+def get_confidence_score(llm, context: str, question: str, answer: str) -> int:
+    """Calls LLM to rate how well the answer is grounded in context. Returns 1-5."""
+    try:
+        prompt = CONFIDENCE_PROMPT.format(
+            context=context[:2000],  # truncate to keep it cheap
+            question=question,
+            answer=answer[:800],
+        )
+        response = llm.invoke(prompt)
+        score = int(response.content.strip()[0])
+        return max(1, min(5, score))  # clamp to 1-5
+    except Exception:
+        return 0  # 0 = could not compute
 
 
-def get_answer(chain, question: str, chat_history: list[dict] = None) -> dict:
-    """
-    Args:
-        chain: built by build_rag_chain()
-        question: current user question
-        chat_history: last N messages from session_state (excluding current question)
-                      format: [{"role": "user"|"assistant", "content": str}]
-    """
+def get_answer(
+    chain,
+    question: str,
+    chat_history: list = None,
+    scoped_papers: list = None,   # list of filenames to restrict retrieval to
+    compute_confidence: bool = False,
+) -> dict:
     if chat_history is None:
         chat_history = []
 
-    # Keep only last 5 exchanges (10 messages) to avoid prompt bloat
     recent_history = chat_history[-10:]
+    vectorstore = get_vectorstore()
 
-    docs = chain["retriever"].invoke(question)
+    # ── Feature 3: Paper scoping via metadata filter ──────────────────────
+    if scoped_papers and len(scoped_papers) > 0:
+        # ChromaDB where filter — match any of the selected filenames
+        # Sources are stored as full paths, so we do a broad fetch then filter
+        all_docs = vectorstore.similarity_search(question, k=chain["top_k"] * 4)
+        docs = [
+            d for d in all_docs
+            if any(
+                sp in d.metadata.get("source", "")
+                for sp in scoped_papers
+            )
+        ]
+        # Fallback: if filter killed everything, use unfiltered
+        if not docs:
+            docs = all_docs[:chain["top_k"]]
+        else:
+            docs = docs[:chain["top_k"]]
+    else:
+        docs = chain["retriever"].invoke(question)
+
     context = format_docs(docs)
     history_text = format_chat_history(recent_history)
 
@@ -130,12 +170,21 @@ def get_answer(chain, question: str, chat_history: list[dict] = None) -> dict:
         question=question,
     )
 
-    response = chain["llm"].invoke(prompt_text)
+    llm = chain["llm"]
+    response = llm.invoke(prompt_text)
+    answer = response.content
+
+    # ── Feature 4: Confidence score ───────────────────────────────────────
+    confidence = None
+    if compute_confidence:
+        confidence = get_confidence_score(llm, context, question, answer)
+
     sources = list({doc.metadata.get("source", "unknown") for doc in docs})
 
     return {
-        "answer": response.content,
+        "answer": answer,
         "sources": sources,
+        "confidence": confidence,
         "retrieved_chunks": [
             {
                 "content": doc.page_content,
