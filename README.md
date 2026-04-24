@@ -100,7 +100,7 @@ Structured Answer + Source citations
 
 ---
 
-## Resume Bullet Points (Actual)
+## Bullet Points
 - Engineered RAG pipeline with LangChain + ChromaDB; retrieves top-k semantically relevant chunks from research PDFs using MMR search
 - Integrated NVIDIA NeMo Guardrails with Colang topic-compliance rules to restrict responses to academic domains
 - Implemented RAGAS evaluation suite measuring Faithfulness, Answer Relevancy, Context Recall, and Context Precision
